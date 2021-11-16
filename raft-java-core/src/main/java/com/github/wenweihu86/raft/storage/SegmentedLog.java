@@ -16,6 +16,7 @@ import java.util.TreeMap;
 
 /**
  * Created by wenweihu86 on 2017/5/3.
+ * 代表整个节点日志，在指定目录下存放着所有日志文件，每个日志文件代表一个日志段。
  */
 public class SegmentedLog {
 
@@ -25,11 +26,13 @@ public class SegmentedLog {
     private String logDataDir;
     private int maxSegmentFileSize;
     private RaftProto.LogMetaData metaData;
+    // 日志文件的起始索引值，日志文件
     private TreeMap<Long, Segment> startLogIndexSegmentMap = new TreeMap<>();
     // segment log占用的内存大小，用于判断是否需要做snapshot
     private volatile long totalSize;
 
     public SegmentedLog(String raftDataDir, int maxSegmentFileSize) {
+        // 日志目录，不存在则创建
         this.logDir = raftDataDir + File.separator + "log";
         this.logDataDir = logDir + File.separator + "data";
         this.maxSegmentFileSize = maxSegmentFileSize;
@@ -37,11 +40,14 @@ public class SegmentedLog {
         if (!file.exists()) {
             file.mkdirs();
         }
+        // 启动时，加载日志目录下的所有日志段
         readSegments();
+        // 遍历所有日志段，加载日志段文件中的的所有日志项
         for (Segment segment : startLogIndexSegmentMap.values()) {
             this.loadSegmentData(segment);
         }
 
+        // 加载该节点的元数据（firstLogIndex、currentTerm、commitIndex、voteFor）
         metaData = this.readMetaData();
         if (metaData == null) {
             if (startLogIndexSegmentMap.size() > 0) {
@@ -161,6 +167,7 @@ public class SegmentedLog {
         return newLastLogIndex;
     }
 
+    // 丢弃日志项
     public void truncatePrefix(long newFirstIndex) {
         if (newFirstIndex <= getFirstLogIndex()) {
             return;
@@ -169,8 +176,10 @@ public class SegmentedLog {
         while (!startLogIndexSegmentMap.isEmpty()) {
             Segment segment = startLogIndexSegmentMap.firstEntry().getValue();
             if (segment.isCanWrite()) {
+                // 该日志文件没写满，退出
                 break;
             }
+            // 该日志文件的最大日志索引值，如果小于新起始日志索引值，则删除该日志文件
             if (newFirstIndex > segment.getEndIndex()) {
                 File oldFile = new File(logDataDir + File.separator + segment.getFileName());
                 try {
@@ -189,8 +198,10 @@ public class SegmentedLog {
         if (startLogIndexSegmentMap.size() == 0) {
             newActualFirstIndex = newFirstIndex;
         } else {
+            // 获取第一个日志文件的起始索引值
             newActualFirstIndex = startLogIndexSegmentMap.firstKey();
         }
+        // 更新节点日志起始索引值
         updateMetaData(null, null, newActualFirstIndex, null);
         LOG.info("Truncating log from old first index {} to new first index {}",
                 oldFirstIndex, newActualFirstIndex);
@@ -246,12 +257,15 @@ public class SegmentedLog {
             long totalLength = segment.getFileSize();
             long offset = 0;
             while (offset < totalLength) {
+                // LogEntry代表一个日志项
                 RaftProto.LogEntry entry = RaftFileUtils.readProtoFromFile(
                         randomAccessFile, RaftProto.LogEntry.class);
                 if (entry == null) {
                     throw new RuntimeException("read segment log failed");
                 }
+                // 再LogEntry上再包装一层，记录该日志项的偏移量
                 Segment.Record record = new Segment.Record(offset, entry);
+                // 收集，添加到该日志段的日志项列表中
                 segment.getEntries().add(record);
                 offset = randomAccessFile.getFilePointer();
             }
@@ -285,6 +299,7 @@ public class SegmentedLog {
                     segment.setEndIndex(0);
                 } else {
                     try {
+                        // 该日志段满了，设置为不可写
                         segment.setCanWrite(false);
                         segment.setStartIndex(Long.parseLong(splitArray[0]));
                         segment.setEndIndex(Long.parseLong(splitArray[1]));
@@ -295,6 +310,7 @@ public class SegmentedLog {
                 }
                 segment.setRandomAccessFile(RaftFileUtils.openFile(logDataDir, fileName, "rw"));
                 segment.setFileSize(segment.getRandomAccessFile().length());
+                // 添加映射关系
                 startLogIndexSegmentMap.put(segment.getStartIndex(), segment);
             }
         } catch(IOException ioException){

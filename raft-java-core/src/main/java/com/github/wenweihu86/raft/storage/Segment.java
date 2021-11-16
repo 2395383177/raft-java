@@ -26,6 +26,7 @@ public class Segment {
     private long fileSize;
     private String fileName;
     private RandomAccessFile randomAccessFile;
+    // 存放该日志段的所有日志项
     private List<Record> entries = new ArrayList<>();
 
     public RaftProto.LogEntry getEntry(long index) {

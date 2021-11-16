@@ -49,16 +49,18 @@ public class ExampleStateMachine implements StateMachine {
             if (db != null) {
                 db.close();
             }
+            // 先删除data目录下的文件
             String dataDir = raftDataDir + File.separator + "rocksdb_data";
             File dataFile = new File(dataDir);
             if (dataFile.exists()) {
                 FileUtils.deleteDirectory(dataFile);
             }
+            // 复制snapshot文件到data目录下
             File snapshotFile = new File(snapshotDir);
             if (snapshotFile.exists()) {
                 FileUtils.copyDirectory(snapshotFile, dataFile);
             }
-            // open rocksdb data dir
+            // 打开db数据目录
             Options options = new Options();
             options.setCreateIfMissing(true);
             db = RocksDB.open(options, dataDir);

@@ -8,6 +8,7 @@ import com.github.wenweihu86.raft.service.RaftConsensusServiceAsync;
 
 /**
  * Created by wenweihu86 on 2017/5/5.
+ * 代表一个节点
  */
 public class Peer {
     private RaftProto.Server server;

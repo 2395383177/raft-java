@@ -40,6 +40,7 @@ public class RaftNode {
 
     private RaftOptions raftOptions;
     private RaftProto.Configuration configuration;
+    // ServerId ：节点
     private ConcurrentMap<Integer, Peer> peerMap = new ConcurrentHashMap<>();
     private RaftProto.Server localServer;
     private StateMachine stateMachine;
@@ -71,6 +72,7 @@ public class RaftNode {
                     RaftProto.Server localServer,
                     StateMachine stateMachine) {
         this.raftOptions = raftOptions;
+        // Configuration类，用来存储节点列表
         RaftProto.Configuration.Builder confBuilder = RaftProto.Configuration.newBuilder();
         for (RaftProto.Server server : servers) {
             confBuilder.addServers(server);
@@ -80,43 +82,52 @@ public class RaftNode {
         this.localServer = localServer;
         this.stateMachine = stateMachine;
 
-        // load log and snapshot
+        // 启动时，加载节点元数据（currentTerm、votedFor、commitIndex），所有日志项数据
         raftLog = new SegmentedLog(raftOptions.getDataDir(), raftOptions.getMaxSegmentFileSize());
+        // 启动时，加载快照数据（lastTerm、lastIndex、serverList）
         snapshot = new Snapshot(raftOptions.getDataDir());
         snapshot.reload();
 
+        // 加载当前任期、提交索引值
         currentTerm = raftLog.getMetaData().getCurrentTerm();
         votedFor = raftLog.getMetaData().getVotedFor();
         commitIndex = Math.max(snapshot.getMetaData().getLastIncludedIndex(), raftLog.getMetaData().getCommitIndex());
-        // discard old log entries
+
+        // 如果当前第一个日志的索引值，<= 快照的索引值，则丢弃该快照之前的旧日志项
         if (snapshot.getMetaData().getLastIncludedIndex() > 0
                 && raftLog.getFirstLogIndex() <= snapshot.getMetaData().getLastIncludedIndex()) {
             raftLog.truncatePrefix(snapshot.getMetaData().getLastIncludedIndex() + 1);
         }
-        // apply state machine
+        // 加载serverList
         RaftProto.Configuration snapshotConfiguration = snapshot.getMetaData().getConfiguration();
         if (snapshotConfiguration.getServersCount() > 0) {
             configuration = snapshotConfiguration;
         }
+        // 启动时，读取指定快照文件
         String snapshotDataDir = snapshot.getSnapshotDir() + File.separator + "data";
         stateMachine.readSnapshot(snapshotDataDir);
-        for (long index = snapshot.getMetaData().getLastIncludedIndex() + 1;
-             index <= commitIndex; index++) {
+        // 从快照索引值开始遍历日志项
+        for (long index = snapshot.getMetaData().getLastIncludedIndex() + 1; index <= commitIndex; index++) {
             RaftProto.LogEntry entry = raftLog.getEntry(index);
             if (entry.getType() == RaftProto.EntryType.ENTRY_TYPE_DATA) {
+                // 应用日志项到状态机
                 stateMachine.apply(entry.getData().toByteArray());
             } else if (entry.getType() == RaftProto.EntryType.ENTRY_TYPE_CONFIGURATION) {
+                // 应用节点配置
                 applyConfiguration(entry);
             }
         }
+        // 更新最后被应用的索引值
         lastAppliedIndex = commitIndex;
     }
 
     public void init() {
+        // 初始化其他节点对象
         for (RaftProto.Server server : configuration.getServersList()) {
             if (!peerMap.containsKey(server.getServerId())
                     && server.getServerId() != localServer.getServerId()) {
                 Peer peer = new Peer(server);
+                // 初始化集群中其他节点的nextIndex为当前最新日志索引值 + 1
                 peer.setNextIndex(raftLog.getLastLogIndex() + 1);
                 peerMap.put(server.getServerId(), peer);
             }
@@ -130,13 +141,14 @@ public class RaftNode {
                 TimeUnit.SECONDS,
                 new LinkedBlockingQueue<Runnable>());
         scheduledExecutorService = Executors.newScheduledThreadPool(2);
+        // 每6分钟执行一次
         scheduledExecutorService.scheduleWithFixedDelay(new Runnable() {
             @Override
             public void run() {
                 takeSnapshot();
             }
         }, raftOptions.getSnapshotPeriodSeconds(), raftOptions.getSnapshotPeriodSeconds(), TimeUnit.SECONDS);
-        // start election
+        // 开始选举
         resetElectionTimer();
     }
 
@@ -402,11 +414,12 @@ public class RaftNode {
             RaftProto.Configuration newConfiguration
                     = RaftProto.Configuration.parseFrom(entry.getData().toByteArray());
             configuration = newConfiguration;
-            // update peerMap
+            // 更新对等节点
             for (RaftProto.Server server : newConfiguration.getServersList()) {
                 if (!peerMap.containsKey(server.getServerId())
                         && server.getServerId() != localServer.getServerId()) {
                     Peer peer = new Peer(server);
+                    // 初始化集群中其他节点的nextIndex为当前最新日志索引值 + 1
                     peer.setNextIndex(raftLog.getLastLogIndex() + 1);
                     peerMap.put(server.getServerId(), peer);
                 }
@@ -434,6 +447,7 @@ public class RaftNode {
         if (electionScheduledFuture != null && !electionScheduledFuture.isDone()) {
             electionScheduledFuture.cancel(true);
         }
+        // 延迟5秒 + (0-5秒随机值)
         electionScheduledFuture = scheduledExecutorService.schedule(new Runnable() {
             @Override
             public void run() {
@@ -464,6 +478,7 @@ public class RaftNode {
                 return;
             }
             LOG.info("Running pre-vote in term {}", currentTerm);
+            // 更新角色为候选人
             state = NodeState.STATE_PRE_CANDIDATE;
         } finally {
             lock.unlock();
@@ -527,6 +542,7 @@ public class RaftNode {
         lock.lock();
         try {
             peer.setVoteGranted(null);
+            // 带上上一次
             requestBuilder.setServerId(localServer.getServerId())
                     .setTerm(currentTerm)
                     .setLastLogIndex(raftLog.getLastLogIndex())
